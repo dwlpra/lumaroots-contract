@@ -87,6 +87,13 @@ contract DeployUpgradeable is Script {
         console.log("Cooldown Time:", lumaRoots.cooldownTime(), "seconds");
         console.log("Min Purchase:", lumaRoots.minPurchaseAmount(), "wei");
         console.log("");
+        console.log("Points System Settings:");
+        console.log("----------------------------------------");
+        console.log("Points Per Water:", lumaRoots.pointsPerWater());
+        console.log("Streak Bonus Points:", lumaRoots.streakBonusPoints());
+        console.log("Max Streak Bonus:", lumaRoots.maxStreakBonus());
+        console.log("Points Per Virtual Tree:", lumaRoots.pointsPerVirtualTree());
+        console.log("");
         console.log("For frontend, update contract.ts with:");
         console.log("  LUMAROOTS_ADDRESS:", address(proxy));
         console.log("  MOCK_PRICE_FEED_ADDRESS:", address(priceFeed));
