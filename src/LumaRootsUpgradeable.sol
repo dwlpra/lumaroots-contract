@@ -10,32 +10,25 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 
 /**
- * @title LumaRootsUpgradeable
- * @dev A Web3 gamified platform for planting real trees through Tree-Nation
- *      Upgradeable via UUPS proxy pattern for future feature development
- * 
- * Security Features:
- * - UUPS Upgradeable: Can fix bugs and add features post-deployment
- * - Pausable: Emergency stop for all user-facing functions
- * - ReentrancyGuard: Protection against reentrancy attacks
- * - Ownable: Admin functions restricted to owner
- * 
- * Game Flow:
- * 1. New user claims FREE virtual tree (gasless via Privy sponsored tx)
- * 2. User waters their forest daily to earn points
- * 3. Points can be redeemed for more virtual trees (grow your forest!)
- * 4. User can donate to plant REAL trees (get NFT certificate)
- * 
- * Tree Types:
- * - Virtual Trees: Free/earned, no NFT, just counter (for gamification)
- * - Real Trees: Paid donation, NFT certificate, actual Tree-Nation tree
- * 
- * Points Economy:
- * - Water daily: 10 points × number of trees
- * - Streak bonus: +5 points per consecutive day (max 7 days = +35)
- * - Redeem: 500 points = 1 virtual tree
- * 
- * Version: 1.1.0 (Added Pausable)
+ * LumaRootsUpgradeable
+ *
+ * This is the main contract for the LumaRoots dApp. We built this to let
+ * people grow a virtual forest while also donating to plant real trees
+ * through Tree-Nation.
+ *
+ * How it works:
+ * - New users get a free starter tree (claimed via gasless tx from Privy)
+ * - Users water their forest daily to earn points
+ * - Points can be spent to grow more virtual trees
+ * - Users can also donate MNT to plant real trees and get an NFT certificate
+ *
+ * We use UUPS proxy so we can upgrade the contract later if needed (bug fixes,
+ * new features, etc). The Pausable modifier lets us hit the brakes if something
+ * goes wrong. ReentrancyGuard is there because we move funds around.
+ *
+ * Storage layout note: if you're upgrading, only append new state variables
+ * at the bottom. Don't reorder or remove existing ones.
+ *
  */
 contract LumaRootsUpgradeable is 
     Initializable,
@@ -57,8 +50,7 @@ contract LumaRootsUpgradeable is
         address buyer;
         uint256 speciesId;
         uint256 projectId;
-        uint256 amountPaid;      // Amount in native token (MNT, ETH, etc)
-        uint256 priceEUR;        // Original price in EUR (6 decimals)
+        uint256 amountPaid;      // Amount in MNT
         uint256 timestamp;
         bool processed;          // Backend has processed this purchase
         bool nftMinted;          // NFT certificate has been minted
@@ -97,8 +89,8 @@ contract LumaRootsUpgradeable is
     uint256 public maxStreakBonus;           // Max streak days for bonus (default: 7)
     uint256 public pointsPerVirtualTree;     // Cost to redeem virtual tree (default: 500)
 
-    // Version tracking for upgrades
-    string public constant VERSION = "1.1.0";
+    // Version tracking
+    string public constant VERSION = "1.0.0";
 
     // ============ Events ============
     
@@ -123,7 +115,6 @@ contract LumaRootsUpgradeable is
         uint256 speciesId,
         uint256 projectId,
         uint256 amountPaid,
-        uint256 priceEUR,
         uint256 timestamp
     );
     
@@ -149,12 +140,10 @@ contract LumaRootsUpgradeable is
         _disableInitializers();
     }
 
-    // ============ Initializer (replaces constructor) ============
+    // ============ Initializer ============
 
-    /**
-     * @dev Initialize the contract (called once during proxy deployment)
-     * @param initialOwner The address that will own the contract
-     */
+    // Called once when we deploy the proxy. Sets up the NFT collection name,
+    // owner address, and all the default game settings.
     function initialize(address initialOwner) public initializer {
         __ERC721_init("LumaRoots Tree Certificate", "LRTC");
         __ERC721URIStorage_init();
@@ -166,26 +155,22 @@ contract LumaRootsUpgradeable is
         cooldownTime = 24 hours;
         minPurchaseAmount = 0.001 ether;
         
-        // Initialize points system
+        // Default points economy - can be tweaked later via setPointsSettings()
         pointsPerWater = 10;
         streakBonusPoints = 5;
         maxStreakBonus = 7;
         pointsPerVirtualTree = 500;
     }
 
-    // ============ UUPS Upgrade Authorization ============
+    // ============ UUPS Upgrade ============
 
-    /**
-     * @dev Required by UUPS pattern - only owner can upgrade
-     */
+    // Only the owner can swap out the implementation. This is the UUPS pattern.
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
-    // ============ Virtual Tree Functions (NEW) ============
+    // ============ Virtual Trees ============
 
-    /**
-     * @dev Claim free starter tree (one per address)
-     * This is meant to be called via gasless/sponsored transaction
-     */
+    // New users call this to get their first tree. We sponsor the gas via Privy
+    // so they don't need MNT to get started. One free tree per wallet.
     function claimFreeTree() external whenNotPaused {
         require(!hasClaimedFreeTree[msg.sender], "Already claimed free tree");
         
@@ -195,10 +180,7 @@ contract LumaRootsUpgradeable is
         emit FreeTreeClaimed(msg.sender, block.timestamp);
     }
 
-    /**
-     * @dev Redeem points for virtual tree
-     * @param numberOfTrees How many trees to redeem
-     */
+    // Spend your hard-earned points to grow your forest! 500 points = 1 tree.
     function redeemPointsForTree(uint256 numberOfTrees) external whenNotPaused {
         require(numberOfTrees > 0, "Must redeem at least 1 tree");
         
@@ -211,24 +193,19 @@ contract LumaRootsUpgradeable is
         emit VirtualTreeRedeemed(msg.sender, totalCost, virtualTreeCount[msg.sender], block.timestamp);
     }
 
-    // ============ Purchase Functions (Real Trees) ============
+    // ============ Real Tree Purchases ============
 
-    /**
-     * @dev Purchase a real tree (donate to Tree-Nation)
-     * @param speciesId The Tree-Nation species ID
-     * @param projectId The Tree-Nation project ID
-     * @param priceEUR The price in EUR (6 decimals, e.g., 1000000 = €1.00)
-     */
+    // This is where the magic happens - users donate MNT to plant a real tree.
+    // The backend listens for TreePurchased events and handles the Tree-Nation API.
+    // After confirmation, the backend calls mintCertificate() to give them the NFT.
     function purchaseTree(
         uint256 speciesId,
-        uint256 projectId,
-        uint256 priceEUR
+        uint256 projectId
     ) external payable nonReentrant whenNotPaused {
         require(msg.value >= minPurchaseAmount, "Below minimum purchase amount");
         require(speciesId > 0, "Invalid species ID");
         require(projectId > 0, "Invalid project ID");
 
-        // Create purchase record
         uint256 purchaseId = _purchaseIdCounter;
         _purchaseIdCounter += 1;
 
@@ -237,7 +214,6 @@ contract LumaRootsUpgradeable is
             speciesId: speciesId,
             projectId: projectId,
             amountPaid: msg.value,
-            priceEUR: priceEUR,
             timestamp: block.timestamp,
             processed: false,
             nftMinted: false
@@ -255,17 +231,12 @@ contract LumaRootsUpgradeable is
             speciesId,
             projectId,
             msg.value,
-            priceEUR,
             block.timestamp
         );
     }
 
-    /**
-     * @dev Mint certificate NFT to user (called by backend after Tree Nation confirmation)
-     * @param purchaseId The purchase ID
-     * @param tokenURI The IPFS metadata URI with tree info
-     * @param treeNationId The Tree Nation tree/certificate ID
-     */
+    // Backend calls this after successfully planting the tree on Tree-Nation.
+    // It mints the NFT certificate to the user's wallet.
     function mintCertificate(
         uint256 purchaseId,
         string memory tokenURI,
@@ -277,24 +248,20 @@ contract LumaRootsUpgradeable is
         require(purchase.processed, "Purchase not yet processed");
         require(!purchase.nftMinted, "NFT already minted");
 
-        // Mint NFT to buyer
         uint256 newTokenId = _tokenIdCounter;
         _tokenIdCounter += 1;
         
         _safeMint(purchase.buyer, newTokenId);
         _setTokenURI(newTokenId, tokenURI);
         
-        // Link NFT to purchase
         tokenIdToPurchaseId[newTokenId] = purchaseId;
         purchase.nftMinted = true;
 
         emit CertificateMinted(newTokenId, purchase.buyer, purchaseId, treeNationId);
     }
 
-    /**
-     * @dev Mark purchase as processed (called by backend after Tree Nation API success)
-     * @param purchaseId The purchase ID
-     */
+    // Backend calls this when Tree-Nation API returns success. It's a simple
+    // flag so we don't double-process purchases.
     function markPurchaseProcessed(uint256 purchaseId) external onlyOwner {
         Purchase storage purchase = purchases[purchaseId];
         require(purchase.buyer != address(0), "Purchase not found");
@@ -303,12 +270,10 @@ contract LumaRootsUpgradeable is
         purchase.processed = true;
     }
 
-    // ============ Watering Game Functions ============
+    // ============ Watering Game ============
 
-    /**
-     * @dev Water the user's forest. Can only be called once per cooldown period.
-     * Earns points based on: (basePoints × totalTrees) + streakBonus
-     */
+    // The core daily engagement loop. Users water their forest once per day
+    // and earn points. More trees = more points. Consecutive days = streak bonus.
     function waterPlant() external whenNotPaused {
         UserPlant storage plant = userPlants[msg.sender];
         
@@ -317,15 +282,14 @@ contract LumaRootsUpgradeable is
             "Cooldown not finished"
         );
 
-        // Calculate total trees (virtual + real NFTs)
         uint256 totalTrees = getTotalTreeCount(msg.sender);
         require(totalTrees > 0, "No trees to water. Claim free tree first!");
 
-        // Reset streak if missed watering window (2x cooldown)
+        // Streak logic: reset if they missed more than 2x cooldown window
         if (plant.lastWaterTime == 0) {
             plant.waterStreak = 1;
         } else if (block.timestamp > plant.lastWaterTime + (cooldownTime * 2)) {
-            plant.waterStreak = 1;  // Reset streak
+            plant.waterStreak = 1;
         } else {
             plant.waterStreak += 1;
         }
@@ -333,7 +297,7 @@ contract LumaRootsUpgradeable is
         plant.lastWaterTime = block.timestamp;
         plant.totalWaterCount += 1;
         
-        // Calculate points earned
+        // Points = (base × trees) + streak bonus
         uint256 basePoints = pointsPerWater * totalTrees;
         uint256 streakBonus = 0;
         
@@ -361,24 +325,19 @@ contract LumaRootsUpgradeable is
 
     // ============ Admin Functions ============
 
-    /**
-     * @dev Pause the contract (emergency stop)
-     * Only owner can call. Prevents all user-facing functions.
-     */
+    // Emergency brake - stops all user actions if something goes wrong.
     function pause() external onlyOwner {
         _pause();
         emit ContractPaused(msg.sender, block.timestamp);
     }
 
-    /**
-     * @dev Unpause the contract (resume normal operation)
-     * Only owner can call.
-     */
+    // All clear - resume normal operations.
     function unpause() external onlyOwner {
         _unpause();
         emit ContractUnpaused(msg.sender, block.timestamp);
     }
 
+    // Tweak the watering cooldown (default 24h, but maybe we want faster for testing)
     function setCooldownTime(uint256 _seconds) external onlyOwner {
         require(_seconds > 0, "Must be > 0");
         uint256 old = cooldownTime;
@@ -386,12 +345,14 @@ contract LumaRootsUpgradeable is
         emit CooldownTimeUpdated(old, _seconds);
     }
 
+    // Set minimum donation amount for real trees
     function setMinPurchaseAmount(uint256 _amount) external onlyOwner {
         uint256 old = minPurchaseAmount;
         minPurchaseAmount = _amount;
         emit MinPurchaseAmountUpdated(old, _amount);
     }
 
+    // Tune the points economy if needed
     function setPointsSettings(
         uint256 _pointsPerWater,
         uint256 _streakBonusPoints,
@@ -406,12 +367,12 @@ contract LumaRootsUpgradeable is
         emit PointsSettingsUpdated(_pointsPerWater, _streakBonusPoints, _maxStreakBonus, _pointsPerVirtualTree);
     }
 
-    // Admin function to award points (for special events, etc.)
+    // Gift points to users (for promos, contests, bug bounties, etc)
     function awardPoints(address user, uint256 amount) external onlyOwner {
         userPoints[user] += amount;
     }
 
-    // Emergency withdraw (in case of stuck funds)
+    // Just in case funds get stuck somehow
     function emergencyWithdraw() external onlyOwner {
         (bool success, ) = payable(owner()).call{value: address(this).balance}("");
         require(success, "Withdraw failed");
@@ -419,18 +380,14 @@ contract LumaRootsUpgradeable is
 
     // ============ View Functions ============
 
-    /**
-     * @dev Get total tree count (virtual + real NFTs)
-     */
+    // Total trees a user has (virtual + real NFTs from donations)
     function getTotalTreeCount(address user) public view returns (uint256) {
         uint256 realTrees = userPurchaseIds[user].length;
         uint256 virtualTrees = virtualTreeCount[user];
         return realTrees + virtualTrees;
     }
 
-    /**
-     * @dev Get user's complete forest status
-     */
+    // Get everything about a user's forest in one call (saves RPC requests)
     function getUserForest(address user) external view returns (
         uint256 virtualTrees,
         uint256 realTrees,
@@ -445,7 +402,7 @@ contract LumaRootsUpgradeable is
         hasFreeTree = hasClaimedFreeTree[user];
     }
 
-    // User plant (watering game)
+    // Watering game stats for a user
     function getUserPlant(address user) external view returns (
         uint256 lastWaterTime,
         uint256 waterStreak,
@@ -455,6 +412,7 @@ contract LumaRootsUpgradeable is
         return (plant.lastWaterTime, plant.waterStreak, plant.totalWaterCount);
     }
 
+    // Check if user can water now (and how long until they can if not)
     function canWaterNow(address user) external view returns (bool canWater, uint256 timeRemaining) {
         UserPlant storage plant = userPlants[user];
         uint256 nextWaterTime = plant.lastWaterTime + cooldownTime;
@@ -466,9 +424,7 @@ contract LumaRootsUpgradeable is
         }
     }
 
-    /**
-     * @dev Calculate points user would earn for watering now
-     */
+    // Preview how many points they'd get if they water now
     function calculateWaterPoints(address user) external view returns (
         uint256 basePoints,
         uint256 streakBonus,
@@ -510,13 +466,12 @@ contract LumaRootsUpgradeable is
         uint256 speciesId,
         uint256 projectId,
         uint256 amountPaid,
-        uint256 priceEUR,
         uint256 timestamp,
         bool processed,
         bool nftMinted
     ) {
         Purchase storage p = purchases[purchaseId];
-        return (p.buyer, p.speciesId, p.projectId, p.amountPaid, p.priceEUR, p.timestamp, p.processed, p.nftMinted);
+        return (p.buyer, p.speciesId, p.projectId, p.amountPaid, p.timestamp, p.processed, p.nftMinted);
     }
 
     function getUserPurchases(address user) external view returns (uint256[] memory) {

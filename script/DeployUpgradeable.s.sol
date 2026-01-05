@@ -38,10 +38,10 @@ contract DeployUpgradeable is Script {
         
         // 1. Deploy MockPriceFeed (for testnet only)
         console.log("Step 1: Deploying MockPriceFeed...");
-        // Initial price: 1 EUR = 2 MNT (2.0 with 8 decimals = 200000000)
-        MockPriceFeed priceFeed = new MockPriceFeed(2_00000000);
+        // Initial price: 1 USD = 1 MNT (1.0 with 8 decimals = 100000000)
+        MockPriceFeed priceFeed = new MockPriceFeed(1_00000000);
         console.log("MockPriceFeed deployed at:", address(priceFeed));
-        console.log("Initial EUR/MNT price: 2.0 (1 EUR = 2 MNT)");
+        console.log("Initial USD/MNT price: 1.0 (1 USD = 1 MNT)");
         console.log("");
         
         // 2. Deploy Implementation contract
