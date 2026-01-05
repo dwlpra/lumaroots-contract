@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721URIStorageUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -12,6 +13,12 @@ import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
  * @title LumaRootsUpgradeable
  * @dev A Web3 gamified platform for planting real trees through Tree-Nation
  *      Upgradeable via UUPS proxy pattern for future feature development
+ * 
+ * Security Features:
+ * - UUPS Upgradeable: Can fix bugs and add features post-deployment
+ * - Pausable: Emergency stop for all user-facing functions
+ * - ReentrancyGuard: Protection against reentrancy attacks
+ * - Ownable: Admin functions restricted to owner
  * 
  * Game Flow:
  * 1. New user claims FREE virtual tree (gasless via Privy sponsored tx)
@@ -28,12 +35,13 @@ import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
  * - Streak bonus: +5 points per consecutive day (max 7 days = +35)
  * - Redeem: 500 points = 1 virtual tree
  * 
- * Version: 1.0.0
+ * Version: 1.1.0 (Added Pausable)
  */
 contract LumaRootsUpgradeable is 
     Initializable,
     ERC721URIStorageUpgradeable, 
-    OwnableUpgradeable, 
+    OwnableUpgradeable,
+    PausableUpgradeable,
     ReentrancyGuard,
     UUPSUpgradeable 
 {
@@ -90,7 +98,7 @@ contract LumaRootsUpgradeable is
     uint256 public pointsPerVirtualTree;     // Cost to redeem virtual tree (default: 500)
 
     // Version tracking for upgrades
-    string public constant VERSION = "1.0.0";
+    string public constant VERSION = "1.1.0";
 
     // ============ Events ============
     
@@ -131,6 +139,8 @@ contract LumaRootsUpgradeable is
     event CooldownTimeUpdated(uint256 oldCooldown, uint256 newCooldown);
     event MinPurchaseAmountUpdated(uint256 oldMin, uint256 newMin);
     event PointsSettingsUpdated(uint256 pointsPerWater, uint256 streakBonus, uint256 maxStreak, uint256 redeemCost);
+    event ContractPaused(address indexed by, uint256 timestamp);
+    event ContractUnpaused(address indexed by, uint256 timestamp);
 
     // ============ Constructor (disabled for upgradeable) ============
     
@@ -149,6 +159,7 @@ contract LumaRootsUpgradeable is
         __ERC721_init("LumaRoots Tree Certificate", "LRTC");
         __ERC721URIStorage_init();
         __Ownable_init(initialOwner);
+        __Pausable_init();
 
         _tokenIdCounter = 0;
         _purchaseIdCounter = 0;
@@ -175,7 +186,7 @@ contract LumaRootsUpgradeable is
      * @dev Claim free starter tree (one per address)
      * This is meant to be called via gasless/sponsored transaction
      */
-    function claimFreeTree() external {
+    function claimFreeTree() external whenNotPaused {
         require(!hasClaimedFreeTree[msg.sender], "Already claimed free tree");
         
         hasClaimedFreeTree[msg.sender] = true;
@@ -188,7 +199,7 @@ contract LumaRootsUpgradeable is
      * @dev Redeem points for virtual tree
      * @param numberOfTrees How many trees to redeem
      */
-    function redeemPointsForTree(uint256 numberOfTrees) external {
+    function redeemPointsForTree(uint256 numberOfTrees) external whenNotPaused {
         require(numberOfTrees > 0, "Must redeem at least 1 tree");
         
         uint256 totalCost = pointsPerVirtualTree * numberOfTrees;
@@ -212,7 +223,7 @@ contract LumaRootsUpgradeable is
         uint256 speciesId,
         uint256 projectId,
         uint256 priceEUR
-    ) external payable nonReentrant {
+    ) external payable nonReentrant whenNotPaused {
         require(msg.value >= minPurchaseAmount, "Below minimum purchase amount");
         require(speciesId > 0, "Invalid species ID");
         require(projectId > 0, "Invalid project ID");
@@ -298,7 +309,7 @@ contract LumaRootsUpgradeable is
      * @dev Water the user's forest. Can only be called once per cooldown period.
      * Earns points based on: (basePoints × totalTrees) + streakBonus
      */
-    function waterPlant() external {
+    function waterPlant() external whenNotPaused {
         UserPlant storage plant = userPlants[msg.sender];
         
         require(
@@ -349,6 +360,24 @@ contract LumaRootsUpgradeable is
     }
 
     // ============ Admin Functions ============
+
+    /**
+     * @dev Pause the contract (emergency stop)
+     * Only owner can call. Prevents all user-facing functions.
+     */
+    function pause() external onlyOwner {
+        _pause();
+        emit ContractPaused(msg.sender, block.timestamp);
+    }
+
+    /**
+     * @dev Unpause the contract (resume normal operation)
+     * Only owner can call.
+     */
+    function unpause() external onlyOwner {
+        _unpause();
+        emit ContractUnpaused(msg.sender, block.timestamp);
+    }
 
     function setCooldownTime(uint256 _seconds) external onlyOwner {
         require(_seconds > 0, "Must be > 0");
